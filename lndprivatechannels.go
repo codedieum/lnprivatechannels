@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/btcsuite/btcd/rpcclient"
@@ -15,7 +16,7 @@ import (
 )
 
 const (
-	blocksInMonth = 30 //4320
+	blocksInMonth = 4320
 	// Mined in Jan 2019. Reasonable start time for lighting network real adoption.
 	startBlock = 560000
 )
@@ -36,6 +37,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer client.Shutdown()
+	// randomDebug(*client)
 
 	// Get the current block count.
 	best_height, err := client.GetBlockCount()
@@ -44,38 +46,6 @@ func main() {
 	}
 	log.Printf("Best height: %d", best_height)
 
-	// block_hash, err := client.GetBlockHash(711019)
-	// block_hash, err := client.GetBlockHash(567520)
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// wire_block, err := client.GetBlock(block_hash)
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// for _, tx := range wire_block.Transactions {
-	// 	if tx.TxHash().String() == "c9714be517c92e95710f6fdae8992f6a7f6f64b4c7bb5bd2b65b5c3400a328e8" { //"37fc0457c8a05f1448fdcaa386e9b9f7dcb5bbb7144a595e2091a4b3380db44d" {
-
-	// 		log.Print(len(tx.TxIn[0].SignatureScript))
-	// 		pkScript, err := txscript.ComputePkScript(tx.TxIn[0].SignatureScript, tx.TxIn[0].Witness)
-	// 		if err != nil {
-	// 			log.Println("a7a")
-	// 		}
-	// 		log.Println(txscript.GetScriptClass(tx.TxOut[0].PkScript))
-	// 		log.Println("witness sig ops", txscript.GetWitnessSigOpCount(tx.TxIn[0].SignatureScript, pkScript.Script(), tx.TxIn[0].Witness))
-	// 		log.Println("script op cnt", txscript.GetSigOpCount(pkScript.Script()))
-	// 		s_i, err := txscript.CalcScriptInfo(tx.TxIn[0].SignatureScript, pkScript.Script(), tx.TxIn[0].Witness, true, true)
-	// 		log.Println("script info", s_i.ExpectedInputs, s_i.NumInputs, s_i.SigOps)
-	// 		log.Print(txscript.GetScriptClass(tx.TxOut[0].PkScript) == txscript.WitnessV0ScriptHashTy)
-
-	// 		log.Println("public chan", isPublicChannel(tx.TxIn[0].PreviousOutPoint.String()))
-	// 		isCloseTx, channelCapacity := isLikelyChannelCloseTx(*tx, *client)
-	// 		log.Println(isCloseTx, channelCapacity)
-	// 		log.Println((3 - 2) / (2 * 1.0))
-	// 		os.Exit(3)
-	// 	}
-	// }
-
 	// We aim at estiamting the number of active private channels in the lightning network.
 	// Our approach is as follows:
 	// 1) Count the number of channel closing transactions in a random month (we can't tell
@@ -83,10 +53,10 @@ func main() {
 	// 2) Correlate some of the channel closes to known public channels. Rest are likely private
 	//    channels closes.
 	// 3) Get the ratio of private channel closes to public ones.
-	// 4) Repeat step 1-3 and average the ratios.
+	// 4) Repeat step 1-3 a few times and average the resulting ratios.
 	// 5) Assuming the resultant ratio is that same as the ratio of active private channels to public ones
 	//    we multiply the ratio by the currently known number of active lightning channels to get our result.
-	const estimateTrials = 2
+	const estimateTrials = 10
 	private_to_public_channel_ratio_estimates := list.New()
 	for tr := 0; tr < estimateTrials; tr++ {
 		block_height := rand.Intn(int(best_height-startBlock)) + startBlock
@@ -109,11 +79,11 @@ func main() {
 				if isCloseTx {
 					channel_close_tx_cnt++
 					if isPublicChannel(tx.TxIn[0].PreviousOutPoint.String()) {
-						log.Println("Acual chane ", tx.TxHash())
+						// log.Println("Acual chane ", tx.TxHash())
 						public_channel_close_tx_cnt++
 						public_channel_cap += channelCapacity
 					} else {
-						log.Println("Channel close? ", tx.TxHash())
+						// log.Println("Channel close? ", tx.TxHash())
 					}
 				}
 			}
@@ -131,7 +101,10 @@ func main() {
 		avg_ratio += e.Value.(float64)
 	}
 	avg_ratio /= estimateTrials
-	log.Println(avg_ratio)
+	// Read for 1ml.com.
+	// Can be queried from local lnd node getnetworkinfo RPC. Mine however returns much lower number of channels :/
+	currentPublicChannelCount := 82182
+	log.Println("Estimated private channel count", int(float64(currentPublicChannelCount)*avg_ratio))
 }
 
 // Returns whether the given Tx is likely to be a lightning channel close TX along
@@ -197,4 +170,37 @@ func isPublicChannel(channelFundingOutput string) bool {
 	// A hack based on insepcting the returned HTML.
 	hasOuput := strings.Contains(bodyString, "<span class=\"selectable\">"+channelFundingOutput+"</span>")
 	return resp.StatusCode == 200 && hasOuput
+}
+
+func randomDebug(client rpcclient.Client) {
+	block_hash, err := client.GetBlockHash(567520)
+	if err != nil {
+		log.Fatal(err)
+	}
+	wire_block, err := client.GetBlock(block_hash)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, tx := range wire_block.Transactions {
+		if tx.TxHash().String() == "c9714be517c92e95710f6fdae8992f6a7f6f64b4c7bb5bd2b65b5c3400a328e8" { //"37fc0457c8a05f1448fdcaa386e9b9f7dcb5bbb7144a595e2091a4b3380db44d" {
+
+			log.Print(len(tx.TxIn[0].SignatureScript))
+			pkScript, err := txscript.ComputePkScript(tx.TxIn[0].SignatureScript, tx.TxIn[0].Witness)
+			if err != nil {
+				log.Println("a7a")
+			}
+			log.Println(txscript.GetScriptClass(tx.TxOut[0].PkScript))
+			log.Println("witness sig ops", txscript.GetWitnessSigOpCount(tx.TxIn[0].SignatureScript, pkScript.Script(), tx.TxIn[0].Witness))
+			log.Println("script op cnt", txscript.GetSigOpCount(pkScript.Script()))
+			s_i, err := txscript.CalcScriptInfo(tx.TxIn[0].SignatureScript, pkScript.Script(), tx.TxIn[0].Witness, true, true)
+			log.Println("script info", s_i.ExpectedInputs, s_i.NumInputs, s_i.SigOps)
+			log.Print(txscript.GetScriptClass(tx.TxOut[0].PkScript) == txscript.WitnessV0ScriptHashTy)
+
+			log.Println("public chan", isPublicChannel(tx.TxIn[0].PreviousOutPoint.String()))
+			isCloseTx, channelCapacity := isLikelyChannelCloseTx(*tx, client)
+			log.Println(isCloseTx, channelCapacity)
+			log.Println((3 - 2) / (2 * 1.0))
+			os.Exit(3)
+		}
+	}
 }
